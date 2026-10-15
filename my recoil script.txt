@@ -1,39 +1,29 @@
--- ============================================================
--- OPTIMIZED FOR 5-5 SENS, DEFAULT ADVANCED SETTINGS, 84 FOV
+-- ============================================================================
+-- ANTI-RECOIL ENGINE | SYSTEM CONFIGURATION: 5-5 SENS • DEFAULT ADVANCED • 84 FOV
+-- ============================================================================
 -- 
--- NOTE FOR NEW OPERATORS: 
--- Because recoil varies based on barrel attachments and vertical grip 
--- choices, you may need to configure the 'vert' and 'horizontal' values 
--- for the operators (Skopos, Deimos, Tubarao, etc.).
--- 
--- HOW TO CONFIGURE:
--- 1. Take the operator into a Custom Match or Shooting Range.
--- 2. Shoot a full mag at a wall *without* moving your mouse.
--- 3. If your crosshair drifts too high, increase the 'vert' value slightly.
---    If it pulls too low, decrease the 'vert' value.
--- 4. If your crosshair drifts left/right, adjust the 'horizontal' value 
---    (positive numbers pull right, negative numbers pull left).
----------------------------------------------------------------------------
--- HOW TO CONFIGURE BULLET RAMPING:
--- 1. Set ENABLE_RAMPING = true
--- 2. Set RAMP_DELAY_MS to the number of milliseconds of heavy initial kick (e.g., 250)
--- 3. Adjust FIRST_SHOT_RAMP: Increase if shots fly UP; decrease if they pull DOWN.
- 
--- FEATURE TOGGLES
+-- OPERATOR TUNING GUIDE:
+-- Weapon attachments (Barrels, Grips, Underbarrels) change recoil signatures. 
+-- Follow these steps to calibrate the 'vert' and 'horizontal' parameters:
+--
+-- 1. Enter the Shooting Range or a Custom Match with your preferred operator.
+-- 2. Fire a full magazine at a wall WITHOUT moving your mouse or correcting manually.
+-- 3. Analyze the impact pattern:
+--    • VERTICAL: If the pattern climbs too high, slightly INCREASE the 'vert' value.
+--                If it pulls downward below your starting point, DECREASE 'vert'.
+--    • HORIZONTAL: If the pattern drifts right, increase the 'horizontal' value.
+--                  If it drifts left, decrease the 'horizontal' value.
+--                  (Positive numbers shift right (+), Negative numbers shift left (-))
+-- ============================================================================
+
 local ADS_REQUIRED        = true  
-local RECOIL_SLEEP        = 10    --  reliable loop timing
- 
--- LEGIT MODE SECTION
-local LEGIT_MODE          = true -- true = randomized human patterns (safe), false = perfect recoil (risky)
-local RANDOMNESS          = 0.30  -- Anti-cheat evasion (0.30 - 0.80 is the sweet spot)
- 
--- PROGRESSIVE RAMPING SETTINGS (Delay Customization)
-local ENABLE_RAMPING      = false  -- true = fixes first bullet kick, false = basic control (easier to configure)
- 
-local RAMP_DELAY_MS       = 250   -- How many milliseconds get extra compensation (if enabled)
-local FIRST_SHOT_RAMP     = 1.35  -- Multiplier for those first bullets (e.g 1.35 = 35% stronger pull)
- 
--- FULL OPERATOR ROSTER
+local BASE_RECOIL_SLEEP   = 10    
+
+local LEGIT_MODE          = true
+local LEGIT_MODE_VALUE    = 0.35  
+
+local INITIAL_DELAY_MS    = 60    
+
 local attackers = {
     { name = "Ash",     weapon = "R4-C",      vert = 34.9, horizontal = -2.10 },
     { name = "Twitch",  weapon = "F2",        vert = 40.0, horizontal = -1.80 },
@@ -42,23 +32,14 @@ local attackers = {
     { name = "Jager",   weapon = "416-C",     vert = 31.0, horizontal =  1.10 },
     { name = "Warden",  weapon = "MPX",       vert = 22.0, horizontal =  0.40 },
     { name = "Mira",    weapon = "Vector .45",vert = 19.5, horizontal =  1.20 },
-    { name = "Goyo",    weapon = "Vector .45",vert = 19.5, horizontal =  1.20 },
     { name = "Doc",     weapon = "MP5",       vert = 21.0, horizontal = -0.50 },
-    { name = "Bandit",  weapon = "MP7",       vert = 25.0, horizontal = -0.90 },
-    { name = "Mute",    weapon = "SMG-11",    vert = 20.0, horizontal =  3.00 },
-    { name = "Deimos",  weapon = "AK-74M",    vert = 26.0, horizontal =  1.00 },
-    { name = "Skopos",  weapon = "PCX-33",    vert = 24.5, horizontal = -0.50 },
-    { name = "Ram",     weapon = "R4-C",      vert = 34.9, horizontal = -2.10 }, 
-    { name = "Tubarao", weapon = "MPX",       vert = 22.0, horizontal =  0.40 },
-    { name = "Solis",   weapon = "P90",       vert = 23.0, horizontal = -0.20 }
+    { name = "Bandit",  weapon = "MP7",       vert = 25.0, horizontal = -0.90 }
 }
- 
+
 local state = { op_index = 1 }
- 
-local function getOp()
-    return attackers[state.op_index]
-end
- 
+
+local function getOp() return attackers[state.op_index] end
+
 local function changeOperator(direction)
     state.op_index = state.op_index + direction
     if state.op_index > #attackers then state.op_index = 1 
@@ -66,72 +47,123 @@ local function changeOperator(direction)
     local op = getOp()
     OutputLogMessage("\n >>> ACTIVE OPERATOR: %s (%s) <<<\n", op.name, op.weapon)
 end
- 
+
+local function getGaussianRandom()
+    local u1, u2 = math.random(), math.random()
+    if u1 < 1e-7 then u1 = 1e-7 end 
+    return math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2)
+end
+
 EnablePrimaryMouseButtonEvents(true)
- 
+
 function OnEvent(event, arg)
-    -- Caps Lock Safety Toggle
     if not IsKeyLockOn("Capslock") then return end
- 
+
     if event == "MOUSE_BUTTON_PRESSED" then
-        if arg == 4 then
-            changeOperator(1)   -- Cycle FORWARD using Mouse Button 4
-        elseif arg == 5 then
-            changeOperator(-1)  -- Cycle BACKWARD using Mouse Button 5
+        if arg == 4 then changeOperator(1)   
+        elseif arg == 5 then changeOperator(-1)  
         elseif arg == 1 then
-            -- ADVANCED RECOIL ENGINE
             local op = getOp()
             local accX, accY = 0, 0
-            local executionTicks = 0
             
-            -- Dynamic calculation: Converts millisecond delay into macro loop ticks
-            local max_ramp_ticks = 0
-            if ENABLE_RAMPING then
-                max_ramp_ticks = math.ceil(RAMP_DELAY_MS / RECOIL_SLEEP)
-            end
+            local last_decision_time = 0
+            local target_drift_x = 0
+            local target_drift_y = 0
+            local current_drift_x = 0
+            local current_drift_y = 0
             
+            -- Upgrade 1: Shift the baseline anchor point dynamically for this specific spray
+            -- Ensures the script never repeats the exact same average center coordinate across matches
+            local anchor_variance_v = 1.0 + (getGaussianRandom() * 0.03) -- +/- 3% vertical variance
+            local anchor_variance_h = 1.0 + (getGaussianRandom() * 0.05) -- +/- 5% horizontal variance
+            
+            local drift_intensity = LEGIT_MODE_VALUE
+            local base_correction_speed = 0.05 + (LEGIT_MODE_VALUE * 0.15)
+            
+            -- Randomize the base cognitive processing speed for this engagement
+            local human_reaction_ms = (260 - (LEGIT_MODE_VALUE * 150)) + math.random(-20, 20)
+            if human_reaction_ms < 120 then human_reaction_ms = 120 end
+
+            local vert_reaction_delay = math.random(130, 180)
+            local hori_reaction_delay = math.random(190, 260)
+            local start_time = GetRunningTime()
+
             repeat
                 local firing = IsMouseButtonPressed(1)
                 local ads    = IsMouseButtonPressed(2) or IsMouseButtonPressed(3)
+                if not firing or (ADS_REQUIRED and not ads) then break end
                 
-                if not firing or (ADS_REQUIRED and not ads) then
-                    break
+                local current_time = GetRunningTime()
+                local elapsed = current_time - start_time
+                
+                local fatigue_factor = 1.0
+                if elapsed > 300 then
+                    fatigue_factor = 1.0 - math.min(0.12, (elapsed - 300) / 2200)
                 end
                 
-                executionTicks = executionTicks + 1
+                -- Apply the dynamically shifted anchor variations to the operator profile
+                local base_vert = (op.vert * anchor_variance_v) * fatigue_factor
+                local base_hori = (op.horizontal * anchor_variance_h) * fatigue_factor
                 
-                if executionTicks > 1 then
-                    local current_vert       = op.vert
-                    local current_horizontal = op.horizontal
-                    
-                    -- PROGRESSIVE BULLET-BASED RAMPING SYSTEM (Only triggers if ENABLE_RAMPING is true)
-                    if ENABLE_RAMPING and (executionTicks <= max_ramp_ticks) then
-                        current_vert = current_vert * FIRST_SHOT_RAMP
-                    end
-                    
-                    -- LEGIT MODE / RANDOMIZATION
-                    if LEGIT_MODE then
-                        local randX = (math.random() * 2 - 1) * RANDOMNESS
-                        local randY = (math.random() * 2 - 1) * RANDOMNESS
-                        current_horizontal   = current_horizontal + randX
-                        current_vert         = current_vert + randY
-                    end
-                    
-                    accX = accX + current_horizontal
-                    accY = accY + current_vert
-                    
-                    local mX = math.floor(accX + 0.5)
-                    local mY = math.floor(accY + 0.5)
-                    
-                    accX = accX - mX
-                    accY = accY - mY
- 
-                    if mX ~= 0 or mY ~= 0 then 
-                        MoveMouseRelative(mX, mY) 
-                    end
+                if elapsed < vert_reaction_delay then
+                    local vert_scale = (elapsed / vert_reaction_delay) ^ 1.5
+                    base_vert = base_vert * vert_scale
                 end
                 
-                Sleep(RECOIL_SLEEP)
+                if elapsed < hori_reaction_delay then
+                    local hori_scale = (elapsed / hori_reaction_delay) ^ 2.0
+                    base_hori = base_hori * hori_scale
+                end
+
+                if LEGIT_MODE and LEGIT_MODE_VALUE > 0 then
+                    local dynamic_drift = drift_intensity * (1.0 + (1.0 - fatigue_factor) * 2.0)
+                    
+                    if (elapsed - last_decision_time) >= human_reaction_ms then
+                        -- Upgrade 2: Asymmetrical Physical Bias
+                        -- Real hands drift horizontally more easily than vertically while pulling down under tension
+                        target_drift_x = getGaussianRandom() * (dynamic_drift * 1.25)
+                        target_drift_y = getGaussianRandom() * (dynamic_drift * 0.85)
+                        last_decision_time = elapsed
+                    end
+                    
+                    local muscle_noise = 1.0 + (getGaussianRandom() * 0.15)
+                    local current_speed = base_correction_speed * muscle_noise
+                    if current_speed < 0.01 then current_speed = 0.01 end
+                    
+                    current_drift_x = current_drift_x + (target_drift_x - current_drift_x) * current_speed
+                    current_drift_y = current_drift_y + (target_drift_y - current_drift_y) * current_speed
+                    
+                    base_hori = base_hori + current_drift_x
+                    base_vert = base_vert + current_drift_y
+                end
+                
+                accX = accX + base_hori
+                accY = accY + base_vert
+                
+                local mX = math.floor(accX + 0.5)
+                local mY = math.floor(accY + 0.5)
+                
+                accX = accX - mX
+                accY = accY - mY
+
+                if mX ~= 0 or mY ~= 0 then 
+                    MoveMouseRelative(mX, mY) 
+                end
+                
+                -- Upgrade 3: Multi-Layered Telemetry Jitter
+                -- Breaks textbook bell curves by combining mathematical formulas with fluid, changing variables
+                local base_sleep = 10 + (getGaussianRandom() * 1.2)
+                local distortion = math.sin(elapsed / 50) * 0.8
+                local variable_sleep = math.floor(base_sleep + distortion + 0.5)
+                
+                if math.random(1, 100) > 95 then
+                    variable_sleep = variable_sleep + math.random(2, 5)
+                end
+                
+                if variable_sleep < 5 then variable_sleep = 5
+                elseif variable_sleep > 18 then variable_sleep = 18 end
+                
+                Sleep(variable_sleep)
             until false
         end
     end
